@@ -181,37 +181,39 @@ impl SP1ProofWithPublicValues {
 
     /// Loads a proof from a path.
     pub fn load(path: impl AsRef<Path>) -> Result<Self> {
-        // Try to load a [`Self`] from the file.
-        let maybe_this: Result<Self> =
-            bincode::deserialize_from(File::open(path.as_ref()).with_context(|| {
-                format!("failed to open file for loading proof: {}", path.as_ref().display())
-            })?)
-            .map_err(Into::into);
-
-        // This may be a proof from the prover network, which lacks the TEE proof field.
-        match maybe_this {
-            Ok(this) => Ok(this),
-            Err(e) => {
-                // If the file does not contain a [`Self`], try to load a [`ProofFromNetwork`]
-                // instead.
-                let maybe_proof_from_network: Result<ProofFromNetwork> =
-                    bincode::deserialize_from(File::open(path.as_ref()).with_context(|| {
-                        format!(
-                            "failed to open file for loading proof: {}",
-                            path.as_ref().display()
-                        )
-                    })?)
-                    .map_err(Into::into);
-
-                if let Ok(proof_from_network) = maybe_proof_from_network {
-                    // The file contains a [`ProofFromNetwork`], which lacks the TEE proof field.
-                    Ok(proof_from_network.into())
-                } else {
-                    // Return the original error from trying to load a [`Self`].
-                    Err(e)
-                }
-            }
+        /// Legacy network format without `cycle_count`.
+        #[derive(Deserialize)]
+        struct LegacyProofFromNetwork {
+            proof: SP1Proof,
+            public_values: SP1PublicValues,
+            sp1_version: String,
         }
+
+        let open = |path: &Path| -> Result<File> {
+            File::open(path).with_context(|| {
+                format!("failed to open file for loading proof: {}", path.display())
+            })
+        };
+
+        // Try to load a [`Self`] from the file.
+        if let Ok(this) = bincode::deserialize_from::<_, Self>(open(path.as_ref())?) {
+            return Ok(this);
+        }
+
+        // Try current ProofFromNetwork format (has cycle_count but no tee_proof).
+        if let Ok(proof) = bincode::deserialize_from::<_, ProofFromNetwork>(open(path.as_ref())?) {
+            return Ok(proof.into());
+        }
+
+        // Try legacy ProofFromNetwork (no tee_proof, no cycle_count).
+        let legacy: LegacyProofFromNetwork =
+            bincode::deserialize_from(open(path.as_ref())?).context("failed to load proof")?;
+        Ok(Self {
+            proof: legacy.proof,
+            public_values: legacy.public_values,
+            sp1_version: legacy.sp1_version,
+            tee_proof: None,
+        })
     }
 
     /// The proof in the byte encoding the onchain verifiers accepts for [`SP1ProofMode::Groth16`]
@@ -507,13 +509,17 @@ mod tests {
 
         bincode::deserialize::<SP1ProofWithPublicValues>(&round_trip_bytes).unwrap();
 
-        let _ = ProofFromNetwork {
+        // ProofFromNetwork now has cycle_count, so old SP1ProofWithPublicValues bytes
+        // can no longer round-trip to ProofFromNetwork. Verify it constructs correctly.
+        let pfn = ProofFromNetwork {
             proof: SP1Proof::Core(vec![]),
             public_values: SP1PublicValues::new(),
             sp1_version: String::new(),
+            cycle_count: 42,
         };
-
-        let _ = bincode::deserialize::<ProofFromNetwork>(&round_trip_bytes).unwrap();
+        let pfn_bytes = bincode::serialize(&pfn).unwrap();
+        let pfn_deser = bincode::deserialize::<ProofFromNetwork>(&pfn_bytes).unwrap();
+        assert_eq!(pfn_deser.cycle_count, 42);
     }
 
     #[tokio::test]

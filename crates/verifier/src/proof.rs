@@ -78,6 +78,8 @@ pub struct ProofFromNetwork {
     pub proof: SP1Proof,
     pub public_values: SP1PublicValues,
     pub sp1_version: String,
+    /// The number of cycles used during execution. A value of 0 means the cycle count is unknown.
+    pub cycle_count: u64,
 }
 
 impl ProofFromNetwork {

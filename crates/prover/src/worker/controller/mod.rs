@@ -427,6 +427,7 @@ where
             proof: inner_proof,
             public_values,
             sp1_version: SP1_CIRCUIT_VERSION.to_string(),
+            cycle_count: result.cycles,
         };
 
         // Upload the proof
